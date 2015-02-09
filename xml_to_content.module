@@ -1,0 +1,266 @@
+<?php 
+/**
+ * Implementation of hook_cron().
+ */
+function xml_to_content_cron() {
+	xml_to_content_update_rss();
+}
+/**
+ * return taxonomy id 
+ */
+function xml_to_content_get_taxonomy($category_id,$category){
+	$taxonomy =  xml_to_content_check_taxonomy($category_id );
+	if($taxonomy == NULL) {
+		// create taxonomy
+		$vid = xml_to_content_get_vid();
+		$taxonomy = xml_to_content_create_taxonomy_term($category, $vid);
+		// create a link for taxonomy
+		$category_link = strtolower($category);
+		// update table xml_to_content_taxonomy to keep track
+		$data = array(
+		   'category_id' => $category_id,
+		   'taxonomy_id' => $taxonomy,
+		   'category' => $category,
+		   'category_link' => xml_to_content_seo_url($category),
+		);
+		drupal_write_record('xml_to_content_taxonomy', $data);
+	}
+	 return $taxonomy;
+}
+
+
+/**
+ * return taxonomy id if table xml_to_content_taxonomy has otherwise return NULL
+ */
+function xml_to_content_check_taxonomy($category_id){
+	$query = db_select('xml_to_content_taxonomy', 'x');
+	$query->condition('x.category_id',$category_id,'=');
+	$query->groupBy('x.category_id');//GROUP BY node ID
+	$query->range(0,1);
+	$query->fields("x", array("taxonomy_id"));
+    $results = $query->execute();
+    if($results->rowCount() != 0) {
+		foreach ($results as $value) {
+			return $value->taxonomy_id;
+		}
+    }else {
+		return NULL;
+    }
+	
+}
+
+
+/**
+ * Parse RSS feed from norcalmarketplace.com and store data to the database.
+ */
+function xml_to_content_update_rss(){	
+	$url = "http://classfeed.goldcountryclassifieds.com/classifieds.xml";
+	$xml = simplexml_load_file($url);
+	if($xml!=FALSE){//check to see loading xml success
+		$i = 0;
+		$tmp = array();
+		while ($xml->item[$i]->guid !=''){
+			$data['guid'] = (int)$xml->item[$i]->guid;
+			$data['ad_id'] = (int)$xml->item[$i]->ad_id;
+			$data['category_id'] = (int)$xml->item[$i]->category_id;
+			$data['category'] = (string)$xml->item[$i]->category;
+			$data['price'] = (float)$xml->item[$i]->price;
+			$data['phone' ]= (string)$xml->item[$i]->phone;
+			$data['email' ]= (string)$xml->item[$i]->email;
+			$data['image'] = (string)$xml->item[$i]->image;
+			$data['description'] = (string)$xml->item[$i]->description;
+			$data['title' ]= (string)$xml->item[$i]->title;
+			$data['start_date'] = (string)$xml->item[$i]->start_date;
+			$data['end_date' ]= (string)$xml->item[$i]->end_date;
+            // create node if node doesn't esist
+			$nid = xml_to_content_record_exist($data['guid']);
+			if(!$nid) {
+				$record['nid'] = xml_to_content_create_node($data);
+				$record['guid'] = $data['guid'];
+				$record['adid'] = $data['ad_id'];
+				drupal_write_record('xml_to_content',$record);
+				$currentNodes[] = $record['nid'];
+			}else {
+				$currentNodes[] = $nid;
+			}
+			$i++;
+		}
+		//delete old nodes which are not in the feed
+		if(isset($currentNodes)){
+				xml_to_content_delete_old_node($currentNodes);
+		}
+	}
+
+}
+/**
+* Delete old content when it is not in the feed.
+*/
+function xml_to_content_delete_old_node($currentNodes){
+	$query = db_select('xml_to_content', 'x');
+	$query->groupBy('x.nid');//GROUP BY node ID
+	$query->fields("x", array("nid"));
+    $results = $query->execute();
+	if (count($results) > 0) {
+		foreach ($results as $value) {
+			if(!in_array($value->nid,$currentNodes)){ 
+				node_delete($value->nid);
+				//delete record in xml_to_content
+				$num_deleted = db_delete('xml_to_content')
+				  ->condition('nid', $value->nid)
+				  ->execute(); 
+			}
+		}
+	}
+}
+/**
+* Create node
+* return newly created node id
+*/
+function xml_to_content_create_node($data){
+	  $node = new stdClass();
+	  if(!isset($data['title'])||$data['title']==''){
+		$data['title'] = $data['category'];
+	  }
+	  $node->title = $data['title'];
+	  $node->field_body = array(
+	      LANGUAGE_NONE => array(
+	        0 => array(
+	          'value' => $data['description'],
+	          'format' => 'full_html',
+	        )
+	      ),
+	    );
+	 $node->type = "classified";
+	  node_object_prepare($node); // Sets some defaults. Invokes hook_prepare() and hook_node_prepare().
+	  $node->language = LANGUAGE_NONE; // Or e.g. 'en' if locale is enabled
+	  $node->uid = 1;
+	  $node->status = 1; //(1 or 0): published or not
+	  $node->promote = 1; //(1 or 0): promoted to front page
+	  $node->comment = 0; // 0 = comments disabled, 1 = read only, 2 = read/write
+	  // field phone
+	  $node->field_phone['und'][0]['value'] = $data['phone'];
+	  // field Email
+	  $node->field_email['und'][0]['email'] = $data['email'];
+	  // field image
+	  if(isset($data['image'])&&$data['image']!=''){
+		$data['image'] = str_replace(' ', '%20', $data['image']);
+		$file = xml_to_content_system_retrieve_file($data['image'], NULL, TRUE, FILE_EXISTS_RENAME);
+		$node->field_image[LANGUAGE_NONE]['0']['fid'] = $file->fid;
+	  }
+	  // field field_class_ad_id
+	  $node->field_ad_id['und'][0]['value'] = $data['ad_id'];
+	  // field start date
+	  $node->field_start_date['und'][0]['value'] = $data['start_date'];
+	  // field end date
+	  $node->field_end_date['und'][0]['value'] = $data['end_date'];
+	  // field field_class_price
+	  if(isset($data['price'])&&($data['price']!= 0.00)){
+	  	$node->field_price['und'][0]['value'] = $data['price'];
+	   }
+	  // Taxonomy
+	  $node->field_category['und'][0]['tid'] = xml_to_content_get_taxonomy($data['category_id'],$data['category']);
+	 /*******************domains*******************/
+	$domainsArray['domain'] = array('1','2','3','4','5','6','7','8','9','10','11','12');
+		 foreach($domainsArray['domain'] as $domain) {
+				$node->domains[$domain] = $domain;			
+		  }
+			$node->domain_site = 1;
+			$node->domain_source = 6;
+	
+	  $node = node_submit($node); // Prepare node for saving
+	  node_save($node);
+	  return $node->nid;
+}
+/*
+* Check record exist or not
+* If exist return nid, othewise return false
+*/
+function xml_to_content_record_exist($guid){	
+	$query = db_select('xml_to_content', 'x');
+	$query->condition('x.guid',$guid,'=');
+	$query->groupBy('x.guid');//GROUP BY node ID
+	$query->range(0,1);
+	$query->fields("x", array("nid"));
+    $results = $query->execute();
+	if (count($results) > 0) {
+		foreach ($results as $value) {
+			if (isset($value->nid)){
+				return $value->nid;
+			}else{
+				return false;
+			}		
+		}
+	}else{
+		return false;
+	}
+}
+
+
+function xml_to_content_init() {
+
+//	xml_to_content_update_rss();
+}
+
+/**
+ * Create a taxonomy term and return the tid.
+ */
+function xml_to_content_create_taxonomy_term($name, $vid) {
+  $term = new stdClass();
+  $term->name = $name;
+  $term->vid = $vid;
+  taxonomy_term_save($term);
+  return $term->tid;
+}
+function xml_to_content_seo_url($string) {
+    //Lower case everything
+    $string = strtolower($string);
+    //Make alphanumeric (removes all other characters)
+    $string = preg_replace("/[^a-z0-9_\s-]/", "", $string);
+    //Clean up multiple dashes or whitespaces
+    $string = preg_replace("/[\s-]+/", " ", $string);
+    //Convert whitespaces and underscore to dash
+    $string = preg_replace("/[\s_]/", "-", $string);
+    return $string;
+}
+/*
+*Attempts to get a file using drupal_http_request and to store it locally.
+*Use:https://api.drupal.org/api/drupal/modules!system!system.module/function/system_retrieve_file/7 
+*/
+function xml_to_content_system_retrieve_file($url, $destination = NULL, $managed = FALSE, $replace = FILE_EXISTS_RENAME) {
+  $parsed_url = parse_url($url);
+  if (!isset($destination)) {
+    $path = file_build_uri(drupal_basename($parsed_url['path']));
+  }
+  else {
+    if (is_dir(drupal_realpath($destination))) {
+      // Prevent URIs with triple slashes when glueing parts together.
+      $path = str_replace('///', '//', "$destination/") . drupal_basename($parsed_url['path']);
+    }
+    else {
+      $path = $destination;
+    }
+  }
+  $result = drupal_http_request($url);
+  if ($result->code != 200) {
+    //drupal_set_message(t('HTTP error @errorcode occurred when trying to fetch @remote.', array('@errorcode' => $result->code, '@remote' => $url)), 'error');
+    return FALSE;
+  }
+  $local = $managed ? file_save_data($result->data, $path, $replace) : file_unmanaged_save_data($result->data, $path, $replace);
+  if (!$local) {
+    drupal_set_message(t('@remote could not be saved to @path.', array('@remote' => $url, '@path' => $path)), 'error');
+  }
+
+  return $local;
+}
+
+/**
+ * get vocabulary id for install taxonomy
+ */
+function xml_to_content_get_vid() {
+  $vid = db_select('taxonomy_vocabulary', 'tv')
+  ->fields('tv', array('vid'))
+  ->condition('machine_name', 'classified_category_taxonomy')
+  ->execute()
+  ->fetchField();
+return  $vid;
+}

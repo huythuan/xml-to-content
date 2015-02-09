@@ -1,0 +1,7 @@
+name = XML To Content
+description = "Creates nodes based upon the contents of an XML file"
+core = 7.x
+version = "7.x-1.0"
+package = Custom
+
+

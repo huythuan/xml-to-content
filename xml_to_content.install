@@ -1,0 +1,108 @@
+<?php
+/**
+ * Implements hook_install().
+ */
+function xml_to_content_install() {
+  $t = get_t();
+ //create taxonomy
+  $vocaClassified = (object) array(
+    'name' => $t('Classified'),
+    'description' => $t('Category for classified'),
+    'machine_name' => 'classified_category_taxonomy',
+    'help' => '',
+  );
+  taxonomy_vocabulary_save($vocaClassified);
+}
+
+
+
+/*
+ *Implement hook_schema().
+ */
+function xml_to_content_schema() {
+  $schema = array();
+  $schema['xml_to_content'] = array(
+    'description' => 'Information about node added.',
+    'fields' => array(
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The node's {node}.nid.",
+      ),
+	'adid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The ad id.",
+      ),
+	'guid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The id from the feed.",
+      ),
+    ),
+    'primary key' => array('nid'),
+  );
+  
+  $schema['xml_to_content_taxonomy'] = array(
+    'description' => 'Information about node added.',
+    'fields' => array(
+      'id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => "The primary identifier.",
+      ),
+	'category_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The category id.",
+      ),
+	'taxonomy_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => "The taxonomy id.",
+      ),
+   	'category' => array(
+       	'type' => 'varchar',
+        'length' => '255',
+        'description' => 'The category name',
+      ),
+	'category_link' => array(
+       	'type' => 'varchar',
+        'length' => '255',
+        'description' => 'The category link',
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+  
+  return $schema;
+}
+
+/*
+ *Implements hook_update_N().
+ */
+function xml_to_content_update_7000() {
+  drupal_install_schema('xml_to_content');
+}
+/**
+ * Implements hook_uninstall().
+ */
+function xml_to_content_uninstall() {
+  $vid = db_select('taxonomy_vocabulary', 'tv')
+  ->fields('tv', array('vid'))
+  ->condition('machine_name', 'classified_category_taxonomy')
+  ->execute()
+  ->fetchField();
+  taxonomy_vocabulary_delete($vid);
+}
